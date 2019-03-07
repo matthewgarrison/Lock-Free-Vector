@@ -2,17 +2,27 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 public class LockFreeVector<T> {
-
-	// Based on Dechev's lock-free vector paper.
-	// The descriptor is used because pushback needs to update several things (size and an element at 
-	// an index) in one CAS. The descriptor allows us to change size immediately, then complete the write
-	// afterward (including having a different thread do it, if necessary).
 	
-	// popback doesn't need a WriteDescriptor because we don't bother to 
-	// set the removed element to null. Therefore, the entire operation just consists of 
-	// changing the size. That's also why there's not a completeWrite() call outside of the 
-	// do-while loop, like there is in pushBack() (there's no write to complete).
-
+	/*
+	 * Based on Dechev at al.'s lock-free vector paper.
+	 * 
+	 * The descriptor is used because pushback needs to update several things (size and an element 
+	 * at an index) in one CAS. The descriptor allows us to change size immediately, then complete 
+	 * the write afterward (including having a different thread do it, if necessary).
+	 * 
+	 * popback doesn't need a WriteDescriptor because we don't bother to set the removed element 
+	 * to null. Therefore, the entire operation just consists of changing the size. That's also 
+	 * why there's not a completeWrite() call outside of the do-while loop, like there is in 
+	 * pushBack() (there's no write to complete).
+	 * 
+	 * Note: The Descriptor in the paper includes a reference counter used by their memory 
+	 * management scheme. I have omitted this.
+	 * 
+	 * I also converted at() into two functions: firstIdx() and secondIdx(). at() returns a pointer 
+	 * to the location in the array, which is impossible in Java. But combining the two new 
+	 * functions gets you the same functionality.
+	 */
+	
 	public static void main(String[] args) {
 		LockFreeVector<Integer> vec = new LockFreeVector<>();
 		vec.reserve(10);
@@ -41,7 +51,7 @@ public class LockFreeVector<T> {
 		}
 	}
 
-	int pushBack(T newElement) {
+	void pushBack(T newElement) {
 		Descriptor<T> currDesc, newDesc;
 		do { // Run until we successfully change the descriptor.
 			currDesc = desc.get();
@@ -58,7 +68,6 @@ public class LockFreeVector<T> {
 
 		// Complete the pending new descriptor (assuming nobody else has).
 		completeWrite(newDesc.writeOp);
-		return -1; // new size? Or success/failure?
 	}
 
 	T popBack() {
@@ -134,7 +143,6 @@ public class LockFreeVector<T> {
 	private static class Descriptor<T> {
 		int size;
 		WriteDescriptor<T> writeOp;
-		// There's also a version counter that solves the ABA problem, but I omitted it for simplicity.
 
 		Descriptor(int s, WriteDescriptor<T> w) {
 			size = s;
