@@ -21,10 +21,15 @@ public class LockFreeVector<T> {
 	 * I also converted at() into two functions: firstIdx() and secondIdx(). at() returns a pointer 
 	 * to the location in the array, which is impossible in Java. But combining the two new 
 	 * functions gets you the same functionality.
+	 * 
+	 * How the binary math works:
+	 * 		firstIdx(): The index of the bucket to use is the index of the highest on bit (accounting
+	 * 			for the FBS), ie. the largest power of 2 in the binary representation of i.
+	 * 		secondIdx(): The index within the bucket is i, with the first on bit turned off (since 
+	 * 			(that bit is used to determine which bucket to use).
 	 */
 
-	// If you change FBS, you'll need to change allocateBucket to do FBS^(bucketSize+1).
-	static final int FBS = 2;
+	static final int FBS = 2; // First bucket size; can be any power of 2.
 	AtomicReference<Descriptor<T>> desc;
 	AtomicReferenceArray<AtomicReferenceArray<T>> vals;
 
