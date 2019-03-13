@@ -124,7 +124,7 @@ public class LockFreeVector<T> {
 
 	// Create a new bucket.
 	private void allocateBucket(int bucketIdx) {
-		int bucketSize = 1 << (bucketIdx+1);
+		int bucketSize = 1 << (bucketIdx + highestBit(FBS));
 		AtomicReferenceArray<T> newBucket = new AtomicReferenceArray<T>(bucketSize);
 		if (!vals.compareAndSet(bucketIdx, null, newBucket)) {
 			// Do nothing, and let the GC free newBucket. (Another thread allocated the bucket.)
