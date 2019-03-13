@@ -23,9 +23,9 @@ public class LockFreeVector<T> {
 	 * functions gets you the same functionality.
 	 * 
 	 * How the binary math works:
-	 * 		firstIdx(): The index of the bucket to use is the index of the highest on bit (accounting
+	 * 		firstIdx(): The index of the bucket to use is the index of the highest one bit (accounting
 	 * 			for the FBS), ie. the largest power of 2 in the binary representation of i.
-	 * 		secondIdx(): The index within the bucket is i, with the first on bit turned off (since 
+	 * 		secondIdx(): The index within the bucket is i, with the first one bit turned off (since 
 	 * 			(that bit is used to determine which bucket to use).
 	 */
 
@@ -41,8 +41,14 @@ public class LockFreeVector<T> {
 	}
 
 	void reserve(int newSize) {
+		// The -1 is used because the `highestBit(x) - highestBit(y)` math finds the bucket for a 
+		// given index. Since we're checking sizes, we only need size-1 indexes.
+		
+		// The index of the largest in-use bucket.
 		int i = highestBit(desc.get().size + FBS - 1) - highestBit(FBS);
 		if (i < 0) i = 0;
+		
+		// Add new buckets until we have enough buckets for newSize elements.
 		while (i < highestBit(newSize + FBS - 1) - highestBit(FBS)) {
 			i++;
 			allocateBucket(i);
@@ -51,16 +57,21 @@ public class LockFreeVector<T> {
 
 	void pushBack(T newElement) {
 		Descriptor<T> currDesc, newDesc;
-		do { // Run until we successfully change the descriptor.
+		// Run until we successfully change the descriptor.
+		do {
 			currDesc = desc.get();
+			
 			// Complete any pending operation of the old descriptor.
 			completeWrite(currDesc.writeOp);
+			
 			// Determine which bucket this element will go in.
 			int bucketIdx = highestBit(currDesc.size + FBS) - highestBit(FBS);
 			// If the appropriate bucket doesn't exist, create it.
 			if (vals.get(bucketIdx) == null) allocateBucket(bucketIdx);
+			
 			// Create a new Descriptor and WriteDescriptor.
-			WriteDescriptor<T> writeOp = new WriteDescriptor<T>(readAt(currDesc.size), newElement, currDesc.size);
+			WriteDescriptor<T> writeOp = new WriteDescriptor<T>(readAt(currDesc.size), newElement, 
+					currDesc.size);
 			newDesc = new Descriptor<T>(currDesc.size + 1, writeOp);
 		} while (!desc.compareAndSet(currDesc, newDesc));
 
@@ -71,23 +82,24 @@ public class LockFreeVector<T> {
 	T popBack() {
 		Descriptor<T> currDesc, newDesc;
 		T elem;
-		do { // Run until we successfully change the descriptor.
+		// Run until we successfully change the descriptor.
+		do {
 			currDesc = desc.get();
+			
 			// Complete any pending operation of the old descriptor.
 			completeWrite(currDesc.writeOp);
+			
 			if (currDesc.size == 0) return null; // There's nothing to pop.
 			elem = readAt(currDesc.size - 1);
-			// Create a new Descriptor. We don't need a WriteDescriptor because we don't bother to 
-			// set the removed element to null. Therefore, the entire operation just consists of 
-			// changing the size. That's also why there's not a completeWrite() call outside of the 
-			// do-while loop, like there is in pushBack() (there's no write to complete).
+			
+			// Create a new Descriptor.
 			newDesc = new Descriptor<T>(currDesc.size - 1, null);
 		} while (!desc.compareAndSet(currDesc, newDesc));
 		
 		return elem;
 	}
 	
-	// New method, not in paper's spec.
+	// New method, not in the paper's spec.
 	T peek() {
 		Descriptor<T> currDesc = desc.get();
 		completeWrite(currDesc.writeOp); // Complete any pending push.
@@ -105,7 +117,7 @@ public class LockFreeVector<T> {
 
 	int size() {
 		int size = desc.get().size;
-		if (desc.get().writeOp.pending) { // A pending pushback().
+		if (desc.get().writeOp.pending) { // A pending pushBack().
 			size--;
 		}
 		return size;
@@ -127,7 +139,8 @@ public class LockFreeVector<T> {
 		int bucketSize = 1 << (bucketIdx + highestBit(FBS));
 		AtomicReferenceArray<T> newBucket = new AtomicReferenceArray<T>(bucketSize);
 		if (!vals.compareAndSet(bucketIdx, null, newBucket)) {
-			// Do nothing, and let the GC free newBucket. (Another thread allocated the bucket.)
+			// Do nothing, and let the GC free newBucket. (Another thread allocated the bucket or 
+			// it already existed.)
 		}
 	}
 
@@ -144,6 +157,7 @@ public class LockFreeVector<T> {
 		return pos ^ (1 << hiBit);
 	}
 
+	// Returns the index of the highest one bit.
 	private int highestBit(int n) {
 		return Integer.numberOfTrailingZeros(Integer.highestOneBit(n));
 	}
