@@ -22,13 +22,6 @@ public class LockFreeVector<T> {
 	 * to the location in the array, which is impossible in Java. But combining the two new 
 	 * functions gets you the same functionality.
 	 */
-	
-	public static void main(String[] args) {
-		LockFreeVector<Integer> vec = new LockFreeVector<>();
-		vec.reserve(10);
-		vec.writeAt(5, 100);
-		System.out.println(vec.readAt(5));
-	}
 
 	// If you change FBS, you'll need to change allocateBucket to do FBS^(bucketSize+1).
 	static final int FBS = 2;
@@ -64,9 +57,9 @@ public class LockFreeVector<T> {
 			// Create a new Descriptor and WriteDescriptor.
 			WriteDescriptor<T> writeOp = new WriteDescriptor<T>(readAt(currDesc.size), newElement, currDesc.size);
 			newDesc = new Descriptor<T>(currDesc.size + 1, writeOp);
-		} while (desc.compareAndSet(currDesc, newDesc));
+		} while (!desc.compareAndSet(currDesc, newDesc));
 
-		// Complete the pending new descriptor (assuming nobody else has).
+		// Complete the pending write (assuming nobody else has).
 		completeWrite(newDesc.writeOp);
 	}
 
@@ -77,14 +70,24 @@ public class LockFreeVector<T> {
 			currDesc = desc.get();
 			// Complete any pending operation of the old descriptor.
 			completeWrite(currDesc.writeOp);
+			if (currDesc.size == 0) return null; // There's nothing to pop.
 			elem = readAt(currDesc.size - 1);
 			// Create a new Descriptor. We don't need a WriteDescriptor because we don't bother to 
 			// set the removed element to null. Therefore, the entire operation just consists of 
 			// changing the size. That's also why there's not a completeWrite() call outside of the 
 			// do-while loop, like there is in pushBack() (there's no write to complete).
 			newDesc = new Descriptor<T>(currDesc.size - 1, null);
-		} while (desc.compareAndSet(currDesc, newDesc));
+		} while (!desc.compareAndSet(currDesc, newDesc));
+		
 		return elem;
+	}
+	
+	// New method, not in paper's spec.
+	T peek() {
+		Descriptor<T> currDesc = desc.get();
+		completeWrite(currDesc.writeOp); // Complete any pending push.
+		if (currDesc.size == 0) return null;
+		else return readAt(currDesc.size - 1);
 	}
 
 	void writeAt(int idx, T newValue) {
@@ -144,9 +147,9 @@ public class LockFreeVector<T> {
 		int size;
 		WriteDescriptor<T> writeOp;
 
-		Descriptor(int s, WriteDescriptor<T> w) {
-			size = s;
-			writeOp = w;
+		Descriptor(int _size, WriteDescriptor<T> _writeOp) {
+			size = _size;
+			writeOp = _writeOp;
 		}
 	}
 
@@ -155,11 +158,11 @@ public class LockFreeVector<T> {
 		int idx;
 		boolean pending;
 
-		WriteDescriptor(T oldV, T newV, int i) {
-			oldValue = oldV;
-			newValue = newV;
-			idx = i;
+		WriteDescriptor(T _oldV, T _newV, int _idx) {
+			oldValue = _oldV;
+			newValue = _newV;
 			pending = true;
+			idx = _idx;
 		}
 	}
 }
