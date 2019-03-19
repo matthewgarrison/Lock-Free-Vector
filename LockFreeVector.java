@@ -18,14 +18,14 @@ public class LockFreeVector<T> {
 	 * Note: The Descriptor in the paper includes a reference counter used by their memory 
 	 * management scheme. I have omitted this.
 	 * 
-	 * I also converted at() into two functions: firstIdx() and secondIdx(). at() returns a pointer 
-	 * to the location in the array, which is impossible in Java. But combining the two new 
-	 * functions gets you the same functionality.
+	 * I also converted at() into two functions: getBucket() and getIdxWithinBucket(). at() returns 
+	 * a pointer to the location in the array, which is impossible in Java. But combining the two 
+	 * new functions gets you the same functionality.
 	 * 
 	 * How the binary math works:
-	 * 		firstIdx(): The index of the bucket to use is the index of the highest one bit (accounting
+	 * 		getBucket(): The index of the bucket to use is the index of the highest one bit (accounting
 	 * 			for the FBS), ie. the largest power of 2 in the binary representation of i.
-	 * 		secondIdx(): The index within the bucket is i, with the first one bit turned off (since 
+	 * 		getIdxWithinBucket(): The index within the bucket is i, with the first one bit turned off (since 
 	 * 			(that bit is used to determine which bucket to use).
 	 */
 
@@ -157,7 +157,7 @@ public class LockFreeVector<T> {
 		return pos ^ (1 << hiBit);
 	}
 
-	// Returns the index of the highest one bit.
+	// Returns the index of the highest one bit. eg. highestBit(8) = 3
 	private int highestBit(int n) {
 		return Integer.numberOfTrailingZeros(Integer.highestOneBit(n));
 	}
