@@ -41,15 +41,15 @@ public class LockFreeVector<T> {
 	}
 
 	void reserve(int newSize) {
-		// The -1 is used because the `highestBit(x) - highestBit(y)` math finds the bucket for a 
-		// given index. Since we're checking sizes, we only need size-1 indexes.
+		// The -1 is used because getBucket() finds the bucket for a given index. Since we're 
+		// checking sizes, we only need to allocate size-1 indexes.
 		
 		// The index of the largest in-use bucket.
-		int i = highestBit(desc.get().size + FBS - 1) - highestBit(FBS);
+		int i = getBucket(desc.get().size - 1);
 		if (i < 0) i = 0;
 		
 		// Add new buckets until we have enough buckets for newSize elements.
-		while (i < highestBit(newSize + FBS - 1) - highestBit(FBS)) {
+		while (i < getBucket(newSize - 1)) {
 			i++;
 			allocateBucket(i);
 		}
@@ -108,11 +108,11 @@ public class LockFreeVector<T> {
 	}
 
 	void writeAt(int idx, T newValue) {
-		vals.get(firstIdx(idx)).set(secondIdx(idx), newValue);
+		vals.get(getBucket(idx)).set(getIdxWithinBucket(idx), newValue);
 	}
 
 	T readAt(int idx) {
-		return vals.get(firstIdx(idx)).get(secondIdx(idx));
+		return vals.get(getBucket(idx)).get(getIdxWithinBucket(idx));
 	}
 
 	int size() {
@@ -128,7 +128,7 @@ public class LockFreeVector<T> {
 		if (writeOp != null && writeOp.pending) {
 			// We don't need to loop until it succeeds, because a failure means some other thread
 			// completed it for us.
-			vals.get(firstIdx(writeOp.idx)).compareAndSet(secondIdx(writeOp.idx), 
+			vals.get(getBucket(writeOp.idx)).compareAndSet(getIdxWithinBucket(writeOp.idx), 
 					writeOp.oldValue, writeOp.newValue);
 			writeOp.pending = false;
 		}
@@ -144,14 +144,14 @@ public class LockFreeVector<T> {
 		}
 	}
 
-	// Returns the first index (level zero) into the array.
-	private int firstIdx(int i) {
+	// Returns the index of the bucket for i (level zero of the array).
+	private int getBucket(int i) {
 		int pos = i + FBS;
 		int hiBit = highestBit(pos);
 		return hiBit - highestBit(FBS);
 	}
-	// Returns the second index (level one) into the array.
-	private int secondIdx(int i) {
+	// Returns the index within the bucket for i (level one of the array).
+	private int getIdxWithinBucket(int i) {
 		int pos = i + FBS;
 		int hiBit = highestBit(pos);
 		return pos ^ (1 << hiBit);
