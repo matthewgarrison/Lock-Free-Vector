@@ -8,17 +8,18 @@ public class LockFreeVectorWithCombining<T> {
 	/*
 	 * Based on Walulya at al.'s lock-free vector paper.
 	 * 
-	 * Notes:
-	 * 		I think I can do CAS(e, u, false, false) - if a node is ever marked, then we can let the 
-	 * 			CAS fail because the value doesn't matter (ie. the node was deleted).
-	 * 		A Combine operation is considered "ready" once the desriptor's batch value is set (this 
-	 * 			done by AddToBatch or popback).
+	 * I think I can do CAS(e, u, false, false) - if a node is ever marked, then we can let the 
+	 * CAS fail because the value doesn't matter (ie. the node was deleted).
+	 * 
+	 * A Combine operation is considered "ready" once the descriptor's batch value is set (this 
+	 * done by AddToBatch or popback).
+	 * 
+	 * The paper doesn't say when to update threadInfo.offset (except in read() and write()), so I 
+	 * update it anywhere doing so doesn't require calling desc.get().size.
 	 * 
 	 * [[Why does ThreadInfo have two Queues (q and batch)?]]
 	 * [[Does each thread has it's own combining queue? If so, when does that get used vs. the 
 	 * 		global combining queue?]]
-	 * [[Rename ThreadInfo.offset to size? When does size get updated? Only on read/write? Or on 
-	 * 		any push/pop/Combine?]]
 	 */
 	
 	static final int FBS = 2; // First bucket size; can be any power of 2.
@@ -112,6 +113,7 @@ public class LockFreeVectorWithCombining<T> {
 		}
 
 		completeWrite(newDesc.writeOp);
+		threadInfo.offset = newDesc.size;
 	}
 
 	T popBack() {
@@ -151,6 +153,7 @@ public class LockFreeVectorWithCombining<T> {
 			}
 		}
 
+		threadInfo.offset = newDesc.size;
 		return elem;
 	}
 	
@@ -191,7 +194,7 @@ public class LockFreeVectorWithCombining<T> {
 		return true;
 	}
 	
-	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean isPushbackThread) {
+	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean startedByPushback) {
 		Queue<AtomicMarkableReference<T>> q = batch.get();
 		int headIndex, headCount;
 		
@@ -261,13 +264,16 @@ public class LockFreeVectorWithCombining<T> {
 		if (descr.opType == OpType.POP) {
 			newSize--;
 		}
+		threadInfo.offset = newSize;
 		
 		// Update the descriptor.
 		Descriptor<AtomicMarkableReference<T>> newDesc = new Descriptor<AtomicMarkableReference<T>>(newSize, null, null);
 		desc.compareAndSet(descr, newDesc);
 		
-		// This thread was executing a popback, so we need to return the last value we pushed.
-		if (!isPushbackThread) {
+		// This thread was executing a popback, so we need to return the last value we pushed. (If 
+		// this Combine was started by a pushback, we don't return anything, even if this thread was 
+		// performing a popback.)
+		if (!startedByPushback) {
 			int index = descr.offset + headCount;
 			T elem = readAt(index);
 			markNode(index); // Mark the node as logically deleted.
@@ -285,13 +291,31 @@ public class LockFreeVectorWithCombining<T> {
 		else return readAt(currDesc.size - 1);
 	}
 
-	// they modified this method, don't forget to do that
 	void writeAt(int idx, T newValue) {
+		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
+		if (idx >= threadInfo.offset) {
+			// Update the local size to match the global descriptor's size.
+			threadInfo.offset = desc.get().size;
+		}
+		if (idx >= threadInfo.offset || vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).
+				isMarked()) {
+			// Out of bounds.
+			return;
+		}
 		vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).set(newValue, false);
 	}
 
-	// [[They modified these methods, don't forget to do that.]]
 	T readAt(int idx) {
+		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
+		if (idx >= threadInfo.offset) {
+			// Update the local size to match the global descriptor's size.
+			threadInfo.offset = desc.get().size;
+		}
+		if (idx >= threadInfo.offset || vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).
+				isMarked()) {
+			// Out of bounds.
+			return null;
+		}
 		return vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).getReference();
 	}
 	private AtomicMarkableReference<T> readRefAt(int idx) {
