@@ -35,7 +35,6 @@ public class LockFreeVector<T> {
 
 	public LockFreeVector() {
 		desc = new AtomicReference<Descriptor<T>>(new Descriptor<T>(0, null));
-		// You need to do this cuz Java is dumb and won't let you make generic arrays.
 		vals = new AtomicReferenceArray<AtomicReferenceArray<T>>(32);
 		vals.getAndSet(0, new AtomicReferenceArray<T>(FBS));
 	}
