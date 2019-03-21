@@ -17,6 +17,8 @@ public class LockFreeVectorWithCombining<T> {
 	 * The paper doesn't say when to update threadInfo.offset (except in read() and write()), so I 
 	 * update it anywhere doing so doesn't require calling desc.get().size.
 	 * 
+	 * Additionally, I added a peek() method.
+	 * 
 	 * [[Why does ThreadInfo have two Queues (q and batch)?]]
 	 * [[Does each thread has it's own combining queue? If so, when does that get used vs. the 
 	 * 		global combining queue?]]
@@ -283,10 +285,17 @@ public class LockFreeVectorWithCombining<T> {
 		return null;
 	}
 
-	// New method, not in the paper's spec.
 	T peek() {
 		Descriptor<AtomicMarkableReference<T>> currDesc = desc.get();
-		completeWrite(currDesc.writeOp); // Complete any pending push.
+		
+		// If there's a current or ready Combine operation, this thread will help complete it.
+		if (currDesc.batch != null) {
+			ThreadInfo<T> threadInfo = threadInfoGlobal.get();
+			combine(threadInfo, currDesc, true);
+		}
+		
+		completeWrite(currDesc.writeOp); // Complete any pending operation.
+		
 		if (currDesc.size == 0) return null;
 		else return readAt(currDesc.size - 1);
 	}
@@ -319,14 +328,23 @@ public class LockFreeVectorWithCombining<T> {
 		return vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).getReference();
 	}
 	private AtomicMarkableReference<T> readRefAt(int idx) {
+		// Does not perform bounds checking.
 		return vals.get(getBucket(idx)).get(getIdxWithinBucket(idx));
 	}
 	
 	int size() {
-		Descriptor<AtomicMarkableReference<T>> d = desc.get();
-		int size = d.size;
-		if (d.writeOp != null && d.writeOp.pending) {
-			if (d.opType == OpType.PUSH) size--;
+		Descriptor<AtomicMarkableReference<T>> currDesc = desc.get();
+		int size = currDesc.size;
+		
+		// If there's a current or ready Combine operation, this thread will help complete it.
+		if (currDesc.batch != null) {
+			ThreadInfo<T> threadInfo = threadInfoGlobal.get();
+			combine(threadInfo, currDesc, true);
+		}
+		
+		// Take into account any pending WriteDescriptors.
+		if (currDesc.writeOp != null && currDesc.writeOp.pending) {
+			if (currDesc.opType == OpType.PUSH) size--;
 			else size++;
 		}
 		return size;
