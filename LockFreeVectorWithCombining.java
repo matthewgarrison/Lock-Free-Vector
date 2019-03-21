@@ -8,15 +8,18 @@ public class LockFreeVectorWithCombining<T> {
 	/*
 	 * Based on Walulya at al.'s lock-free vector paper.
 	 * 
-	 * I think I can do CAS(e, u, false, false) - if a node is ever marked, then we can let the 
-	 * CAS fail cuz the value doesn't matter.
+	 * Notes:
+	 * 		I think I can do CAS(e, u, false, false) - if a node is ever marked, then we can let the 
+	 * 			CAS fail because the value doesn't matter (ie. the node was deleted).
+	 * 		A Combine operation is considered "ready" once the desriptor's batch value is set (this 
+	 * 			done by AddToBatch or popback).
+	 * 
+	 * [[Why does ThreadInfo have two Queues (q and batch)?]]
+	 * [[Does each thread has it's own combining queue? If so, when does that get used vs. the 
+	 * 		global combining queue?]]
+	 * [[Rename ThreadInfo.offset to size? When does size get updated? Only on read/write? Or on 
+	 * 		any push/pop/Combine?]]
 	 */
-	
-	
-	
-	// wait one frigging minute - does each thread get a combining queue?
-	
-	
 	
 	static final int FBS = 2; // First bucket size; can be any power of 2.
 	static final int QSize = -1; // Size of the bounded combining queue.
@@ -28,7 +31,6 @@ public class LockFreeVectorWithCombining<T> {
 
 	public LockFreeVectorWithCombining() {
 		desc = new AtomicReference<Descriptor<AtomicMarkableReference<T>>>(new Descriptor<>(0, null, null));
-		// You need to do this cuz Java is dumb and won't let you make generic arrays.
 		vals = new AtomicReferenceArray<AtomicReferenceArray<AtomicMarkableReference<T>>>(32);
 		vals.getAndSet(0, new AtomicReferenceArray<AtomicMarkableReference<T>>(FBS));
 		SENTINEL_ONE = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -1);
@@ -51,18 +53,17 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	void pushBack(T newElement) {
-		// vector??
-		boolean batchExists = false, help = false;
+		boolean willAddToBatch = false, help = false;
 		Descriptor<AtomicMarkableReference<T>> currDesc, newDesc;
 		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
 		AtomicMarkableReference<T> newRef = new AtomicMarkableReference<>(newElement, false);
 		while (true) {
 			currDesc = desc.get();
 
+			// Complete any pending operation.
 			completeWrite(currDesc.writeOp);
 			
-			// "a concurrent Combine operation is on-going, and the thread tries to help complete 
-			// this operation."
+			// If there's a current or ready Combine operation, this thread will help complete it.
 			if (currDesc.batch != null) {
 				combine(threadInfo, currDesc, true);
 			}
@@ -77,35 +78,36 @@ public class LockFreeVectorWithCombining<T> {
 			// If the appropriate bucket doesn't exist, create it.
 			if (vals.get(bucketIdx) == null) allocateBucket(bucketIdx);
 
-			//  If a thread has added an item to the combining queue, subsequent pushback operations 
-			// will add the items to the combining queue until the queue is closed
-			// ie. our CAS later in the method failed or this thread has already added stuff to a 
-			// combining queue, so add this operation to the combining queue
-			if (batchExists || (threadInfo.q != null && threadInfo.q == batch.get())) {
-				if (addToBatch(threadInfo, writeOp)) {
-					return; // the operation is in the queue, we're done here
+			// If our CAS failed (in a previous loop iteration) or this thread has already added 
+			// items to the queue, then we'll try to add this operation to the queue. (Once we add 
+			// one operation to the queue, we'll keep doing so until that queue closes.)
+			if (willAddToBatch || (threadInfo.q != null && threadInfo.q == batch.get())) {
+				if (addToBatch(threadInfo, newDesc, writeOp)) {
+					return; // The operation was added to the queue, so we're done here.
 				}
-				// we couldn't add it to the batch - not sure what this does, though
-				// why is newDesc.writeOp now null? we didn't add it to the queue
+				// We couldn't add it to the queue.
+				// [[Not sure why we set newDesc.writeOp to null - we didn't add it to the queue, 
+				// so where did it go?]]
 				newDesc = new Descriptor<AtomicMarkableReference<T>>(currDesc.size, null, null);
 				help = true;
 				threadInfo.q = null;
 			}
 
-			// try the normal compare and set
+			// Try the normal compare and set.
 			if (desc.compareAndSet(currDesc, newDesc)) {
 				if (newDesc.batch != null) {
-					// why are we combining?
+					// AddToBatch set the descriptor's queue, which only happens when we're ready 
+					// to combine.
 					combine(threadInfo, newDesc, true);
-					if (help) { // we're going to help another thread, I guess?
+					if (help) { // [[We're going to help another thread, I guess?]]
 						help = false;
 						continue;
 					}
 				}
-				break; // we're done
+				break; // We're done.
 			} else {
-				// the thread adds the operation to the combining queue (in the next loop iteration)
-				batchExists = true;
+				// The thread adds the operation to the combining queue (in the next loop iteration).
+				willAddToBatch = true;
 			}
 		}
 
@@ -113,18 +115,16 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	T popBack() {
-		// vector??
-		boolean batchExists = false, help = false;
 		Descriptor<AtomicMarkableReference<T>> currDesc, newDesc;
 		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
 		T elem;
 		while (true) {
 			currDesc = desc.get();
 
-			// complete a pending operation
+			// Complete any pending operation
 			completeWrite(currDesc.writeOp);
 			
-			// we need to execute any waiting pushes before we can pop
+			// If there's a current or ready Combine operation, this thread will help complete it.
 			if (currDesc.batch != null) {
 				combine(threadInfo, currDesc, true);
 			}
@@ -134,17 +134,17 @@ public class LockFreeVectorWithCombining<T> {
 
 			// Create a new Descriptor.
 			newDesc = new Descriptor<>(currDesc.size - 1, null, OpType.POP);
-			newDesc.batch = batch.get();
+			newDesc.batch = batch.get(); // This signals that the Combine operation should start.
 			newDesc.offset = currDesc.size;
 
 			if (desc.compareAndSet(currDesc, newDesc)) {
 				if (newDesc.batch != null && newDesc.batch == batch.get()) {
-					// We're gonna help with a combine, then return the last element in the 
-					// combining queue.
+					// We need to execute any pending pushes before we can pop. Then we'll return 
+					// the last element added to the vector by Combine.
 					threadInfo.q.closed = true;
 					elem = combine(threadInfo, newDesc, false);
 				} else {
-					// Marking the node as logicall deleted.
+					// Mark the node as logically deleted.
 					markNode(currDesc.size);
 				}
 				break;
@@ -154,98 +154,107 @@ public class LockFreeVectorWithCombining<T> {
 		return elem;
 	}
 	
-	// I call the WriteDescriptor writeOp for consistent naming (the paper calls it descr, which is 
-	// confusing).
-	boolean addToBatch(ThreadInfo<T> threadInfo, WriteDescriptor<AtomicMarkableReference<T>> descr) {
+	boolean addToBatch(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, 
+			WriteDescriptor<AtomicMarkableReference<T>> writeOp) {
 		Queue<AtomicMarkableReference<T>> queue = batch.get();
-		if (queue == null) { // check if the vector has a combining queue
-			Queue<AtomicMarkableReference<T>> newQ = new Queue<>(descr);
+		// Check if the vector has a combining queue already. If not, we'll make one.
+		if (queue == null) {
+			Queue<AtomicMarkableReference<T>> newQ = new Queue<>(writeOp);
 			if (batch.compareAndSet(queue, newQ)) {
 				return true;
 			}
 		}
 		
-		queue = batch.get(); // in case a different thread CASed before us
+		queue = batch.get(); // In case a different thread CASed before us.
 		if (queue == null || queue.closed) {
-			// we don't add descr, cuz it's closed/non-existant
+			// We don't add descr, because the queue is closed or non-existent.
 			descr.batch = queue;
 			return false;
 		}
 		
-		int ticket = queue.tail.getAndAdd(1); // where we'll insert
+		int ticket = queue.tail.getAndAdd(1); // Where we'll insert into the queue.
 		if (ticket >= QSize) {
-			// queue is full, so close it and return a failure
+			// The queue is full, so close it and return a failure.
 			queue.closed = true;
 			descr.batch = queue;
 			return false;
 		}
 		
-		if (!queue.items.compareAndSet(ticket, null, descr)) { // add it to the queue
-			return false; // we failed, someone stole our spot
+		if (!queue.items.compareAndSet(ticket, SENTINEL_ONE, writeOp)) { // Add it to the queue.
+			return false; // We failed; someone stole our spot.
 		}
 		
-		Queue<AtomicMarkableReference<T>> newQ = new Queue<>(descr); // what's the point of this? we don't do anything with it
+		// [[What's the point of this? We don't do anything with it.]]
+		Queue<AtomicMarkableReference<T>> newQ = new Queue<>(writeOp);
+		
+		// We successfully added the operation to the queue.
 		return true;
 	}
 	
-	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean helper) {
+	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean isPushbackThread) {
 		Queue<AtomicMarkableReference<T>> q = batch.get();
-		int headIndex, headCount, currCount = 0;
+		int headIndex, headCount;
 		
-		if (q == null || !q.closed) { // the paper has an AND here, which I don't think makes sense?
-			return null; // queue not closed, so somebody else already combined
+		if (q == null || !q.closed) { // [[The paper has an AND here, which I don't think makes sense?]]
+			return null; // The queue is not closed, so the combining phase is finished.
 		}
 		
-		// we dequeue items and add them to the vector
+		// We dequeue operations and execute them.
 		while (true) {
-			// headIndex is the dequeue index
 			Head head = q.head.get();
 			headIndex = head.index;
 			headCount = head.count;
 			
-			int bucketIdx = getBucket(descr.offset + currCount);
+			// Determine which bucket this element will go in.
+			// [[The paper uses a variable called cur_count, but that's not referenced anywhere else, 
+			// so I think they mean headCount.]]
+			int bucketIdx = getBucket(descr.offset + headCount);
+			// If the appropriate bucket doesn't exist, create it.
 			if (vals.get(bucketIdx) == null) allocateBucket(bucketIdx);
 			
 			AtomicMarkableReference<T> oldValue = readRefAt(descr.offset + headCount);
 			int ticket = headIndex;
 			if (ticket == q.tail.get() || ticket == QSize) {
-				break;
+				break; // We executed every operation in the queue.
 			}
 			
-			// linearize with push operation
-			// 1) the corresponding AddToBatch operation has not completed adding item to the combining queue.
+			// If our CAS succeeds, then the corresponding AddToBatch operation has not finished 
+			// adding the item to the combining queue, so we just keep going.
 			if (q.items.compareAndSet(ticket, SENTINEL_ONE, SENTINEL_TWO)) {
-				Head newHead = new Head(headIndex + 1, headCount); // update head
-				q.head.compareAndSet(head, newHead); // The paper updates tail here, but I'm pretty sure that's wrong.
+				Head newHead = new Head(headIndex + 1, headCount);
+				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
+				q.head.compareAndSet(head, newHead);
 				continue;
 			}
 			
-			// 3) the node value was by an interfering Combine operation before the AddToBatch 
-			// succeeded (the AddToBatch failed).
+			// One of the others threads helping with this Combine operation succeeded in the CAS
+			// (see above), so the AddToBatch failed and we keep going. 
 			if (q.items.get(ticket) == SENTINEL_TWO) { // gaps
 				Head newHead = new Head(headIndex + 1, headCount); 
-				q.head.compareAndSet(head, newHead); // The paper updates tail here, but I'm pretty sure that's wrong.
+				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
+				q.head.compareAndSet(head, newHead);
 				continue;
 			}
 			
-			// 2) The node value is a write descriptor which implies that the AddToBatch 
-			// operation completed successfully.
+			// The AddToBatch succeeded, so now we'll try to execute the WriteDescriptor's operation.
 			WriteDescriptor<AtomicMarkableReference<T>> writeOp = q.items.get(ticket);
-			if (!writeOp.pending) { // update head
+			if (!writeOp.pending) { // A different thread did it for us, so just update head.
 				Head newHead = new Head(headIndex + 1, headCount+1);
-				q.head.compareAndSet(head, newHead); // The paper updates tail here, but I'm pretty sure that's wrong.
+				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
+				q.head.compareAndSet(head, newHead);
 				continue;
 			}
 			
-			// complete writeop's pending operation
+			// Complete writeOp's pending operation.
 			if (writeOp.pending && q.head.get().index == headIndex && q.head.get().count == headCount) {
 				int temp = descr.offset + headCount;
 				vals.get(getBucket(temp)).compareAndSet(getIdxWithinBucket(temp), oldValue, writeOp.newValue);
 			}
 			
+			// Update head and mark writeOp as complete.
 			Head newHead = new Head(headIndex + 1, headCount+1);
 			q.head.compareAndSet(head, newHead);
-			writeOp.pending = true;
+			writeOp.pending = false;
 		}
 		
 		int newSize = descr.offset + headCount;
@@ -253,13 +262,15 @@ public class LockFreeVectorWithCombining<T> {
 			newSize--;
 		}
 		
+		// Update the descriptor.
 		Descriptor<AtomicMarkableReference<T>> newDesc = new Descriptor<AtomicMarkableReference<T>>(newSize, null, null);
 		desc.compareAndSet(descr, newDesc);
 		
-		if (!helper) {
+		// This thread was executing a popback, so we need to return the last value we pushed.
+		if (!isPushbackThread) {
 			int index = descr.offset + headCount;
 			T elem = readAt(index);
-			markNode(index);
+			markNode(index); // Mark the node as logically deleted.
 			return elem;
 		}
 		
@@ -279,7 +290,7 @@ public class LockFreeVectorWithCombining<T> {
 		vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).set(newValue, false);
 	}
 
-	// they modified this method, don't forget to do that
+	// [[They modified these methods, don't forget to do that.]]
 	T readAt(int idx) {
 		return vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).getReference();
 	}
@@ -288,17 +299,17 @@ public class LockFreeVectorWithCombining<T> {
 	}
 	
 	int size() {
-		int size = desc.get().size;
-		if (desc.get().writeOp.pending) { // A pending pushBack().
-			size--;
+		Descriptor<AtomicMarkableReference<T>> d = desc.get();
+		int size = d.size;
+		if (d.writeOp != null && d.writeOp.pending) {
+			if (d.opType == OpType.PUSH) size--;
+			else size++;
 		}
 		return size;
 	}
 	
-	// how to do this in java? AtomicMarkableReference<Integer>? look at LockFreeList
 	private void markNode(int idx) {
-		int[] temp = new int[1];
-		temp[-1] = 0;
+		vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).attemptMark(readAt(idx), true);
 	}
 	
 	// Finish a pending write operation.
@@ -359,14 +370,12 @@ public class LockFreeVectorWithCombining<T> {
 		E oldValue, newValue;
 		int idx;
 		boolean pending;
-		Queue<E> batch;
 
 		WriteDescriptor(E _oldV, E _newV, int _idx) {
 			oldValue = _oldV;
 			newValue = _newV;
 			pending = true;
 			idx = _idx;
-			batch = null;
 		}
 	}
 
@@ -390,7 +399,8 @@ public class LockFreeVectorWithCombining<T> {
 	}
 	
 	private static class Head {
-		// count indicates the number of successfully combined operations.
+		// index is the index of the head point and count indicates the number of successfully 
+		// combined operations.
 		int index, count;
 		Head(int _index, int _count) {
 			index = _index;
@@ -403,7 +413,6 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	private static class ThreadInfo<T> {
-		// vector??
 		Queue<AtomicMarkableReference<T>> q, batch;
 		int offset;
 		
