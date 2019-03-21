@@ -22,6 +22,8 @@ public class LockFreeVector<T> {
 	 * a pointer to the location in the array, which is impossible in Java. But combining the two 
 	 * new functions gets you the same functionality.
 	 * 
+	 * Additionally, I added a peek() method.
+	 * 
 	 * How the binary math works:
 	 * 		getBucket(): The index of the bucket to use is the index of the highest one bit (accounting
 	 * 			for the FBS), ie. the largest power of 2 in the binary representation of i.
@@ -98,7 +100,6 @@ public class LockFreeVector<T> {
 		return elem;
 	}
 	
-	// New method, not in the paper's spec.
 	T peek() {
 		Descriptor<T> currDesc = desc.get();
 		completeWrite(currDesc.writeOp); // Complete any pending push.
