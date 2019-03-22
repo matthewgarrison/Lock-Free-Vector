@@ -30,7 +30,7 @@ public class LockFreeVectorWithCombining<T> {
 	 * 		the `getBucket(descr.offset + headCount)` to work, we either need to only update size
 	 * 		or we need to check both.]]
 	 */
-	
+
 	static final int FBS = 2; // First bucket size; can be any power of 2.
 	static final int QSize = 16; // Size of the bounded combining queue.
 	AtomicReference<Descriptor<AtomicMarkableReference<T>>> desc;
@@ -41,18 +41,18 @@ public class LockFreeVectorWithCombining<T> {
 
 	public LockFreeVectorWithCombining() {
 		desc = new AtomicReference<Descriptor<AtomicMarkableReference<T>>>(new Descriptor<>(0, null, null));
-		
+
 		vals = new AtomicReferenceArray<AtomicReferenceArray<AtomicMarkableReference<T>>>(32);
 		vals.getAndSet(0, new AtomicReferenceArray<AtomicMarkableReference<T>>(FBS));
-		
+
 		threadInfoGlobal = new ThreadLocal<>() {
 			@Override protected ThreadInfo<T> initialValue() {
 				return new ThreadInfo<T>();
 			}
 		};
-		
-		batch = null; // The combining queue is initially null.
-		
+
+		batch = new AtomicReference<>(null);
+
 		SENTINEL_ONE = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -1);
 		SENTINEL_TWO = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -2);
 	}
@@ -60,11 +60,11 @@ public class LockFreeVectorWithCombining<T> {
 	void reserve(int newSize) {
 		// The -1 is used because getBucket() finds the bucket for a given index. Since we're 
 		// checking sizes, we only need to allocate size-1 indexes.
-		
+
 		// The index of the largest in-use bucket.
 		int i = getBucket(desc.get().size - 1);
 		if (i < 0) i = 0;
-		
+
 		// Add new buckets until we have enough buckets for newSize elements.
 		while (i < getBucket(newSize - 1)) {
 			i++;
@@ -82,21 +82,21 @@ public class LockFreeVectorWithCombining<T> {
 
 			// Complete any pending operation.
 			completeWrite(currDesc.writeOp);
-			
+
 			// If there's a current or ready Combine operation, this thread will help complete it.
 			if (currDesc.batch != null) {
 				combine(threadInfo, currDesc, true);
 			}
 
-			// Create a new Descriptor and WriteDescriptor.
-			WriteDescriptor<AtomicMarkableReference<T>> writeOp = new WriteDescriptor<AtomicMarkableReference<T>>
-					(readRefAt(currDesc.size), newRef, currDesc.size);
-			newDesc = new Descriptor<AtomicMarkableReference<T>>(currDesc.size + 1, writeOp, OpType.PUSH);
-
 			// Determine which bucket this element will go in.
 			int bucketIdx = getBucket(currDesc.size);
 			// If the appropriate bucket doesn't exist, create it.
 			if (vals.get(bucketIdx) == null) allocateBucket(bucketIdx);
+
+			// Create a new Descriptor and WriteDescriptor.
+			WriteDescriptor<AtomicMarkableReference<T>> writeOp = new WriteDescriptor<AtomicMarkableReference<T>>
+			(readRefAt(currDesc.size), newRef, currDesc.size);
+			newDesc = new Descriptor<AtomicMarkableReference<T>>(currDesc.size + 1, writeOp, OpType.PUSH);
 
 			// If our CAS failed (in a previous loop iteration) or this thread has already added 
 			// items to the queue, then we'll try to add this operation to the queue. (Once we add 
@@ -144,12 +144,12 @@ public class LockFreeVectorWithCombining<T> {
 
 			// Complete any pending operation
 			completeWrite(currDesc.writeOp);
-			
+
 			// If there's a current or ready Combine operation, this thread will help complete it.
 			if (currDesc.batch != null) {
 				combine(threadInfo, currDesc, true);
 			}
-			
+
 			if (currDesc.size == 0 && batch.get() == null) return null; // There's nothing to pop.
 			elem = readAt(currDesc.size - 1);
 
@@ -166,7 +166,7 @@ public class LockFreeVectorWithCombining<T> {
 					elem = combine(threadInfo, newDesc, false);
 				} else {
 					// Mark the node as logically deleted.
-					markNode(currDesc.size);
+					markNode(currDesc.size - 1);
 				}
 				break;
 			}
@@ -175,7 +175,7 @@ public class LockFreeVectorWithCombining<T> {
 		threadInfo.offset = newDesc.size;
 		return elem;
 	}
-	
+
 	boolean addToBatch(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, 
 			WriteDescriptor<AtomicMarkableReference<T>> writeOp) {
 		Queue<AtomicMarkableReference<T>> queue = batch.get();
@@ -186,14 +186,14 @@ public class LockFreeVectorWithCombining<T> {
 				return true;
 			}
 		}
-		
+
 		queue = batch.get(); // In case a different thread CASed before us.
 		if (queue == null || queue.closed) {
 			// We don't add descr, because the queue is closed or non-existent.
 			descr.batch = queue;
 			return false;
 		}
-		
+
 		int ticket = queue.tail.getAndAdd(1); // Where we'll insert into the queue.
 		if (ticket >= QSize) {
 			// The queue is full, so close it and return a failure.
@@ -201,45 +201,46 @@ public class LockFreeVectorWithCombining<T> {
 			descr.batch = queue;
 			return false;
 		}
-		
+
 		if (!queue.items.compareAndSet(ticket, SENTINEL_ONE, writeOp)) { // Add it to the queue.
 			return false; // We failed; someone stole our spot.
 		}
-		
+
 		// [[What's the point of this? We don't do anything with it.]]
 		Queue<AtomicMarkableReference<T>> newQ = new Queue<>(writeOp);
-		
+
 		// We successfully added the operation to the queue.
 		return true;
 	}
-	
-	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean startedByPushback) {
+
+	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean 
+			startedByPushback) {
 		Queue<AtomicMarkableReference<T>> q = batch.get();
 		int headIndex, headCount;
-		
+
 		if (q == null || !q.closed) { // [[The paper has an AND here, which I don't think makes sense?]]
 			return null; // The queue is not closed, so the combining phase is finished.
 		}
-		
+
 		// We dequeue operations and execute them.
 		while (true) {
 			Head head = q.head.get();
 			headIndex = head.index;
 			headCount = head.count;
-			
+
 			// Determine which bucket this element will go in.
 			// [[The paper uses a variable called cur_count, but that's not referenced anywhere else, 
 			// so I think they mean headCount.]]
 			int bucketIdx = getBucket(descr.offset + headCount);
 			// If the appropriate bucket doesn't exist, create it.
 			if (vals.get(bucketIdx) == null) allocateBucket(bucketIdx);
-			
+
 			AtomicMarkableReference<T> oldValue = readRefAt(descr.offset + headCount);
 			int ticket = headIndex;
 			if (ticket == q.tail.get() || ticket == QSize) {
 				break; // We executed every operation in the queue.
 			}
-			
+
 			// If our CAS succeeds, then the corresponding AddToBatch operation has not finished 
 			// adding the item to the combining queue, so we just keep going.
 			if (q.items.compareAndSet(ticket, SENTINEL_ONE, SENTINEL_TWO)) {
@@ -248,7 +249,7 @@ public class LockFreeVectorWithCombining<T> {
 				q.head.compareAndSet(head, newHead);
 				continue;
 			}
-			
+
 			// One of the others threads helping with this Combine operation succeeded in the CAS
 			// (see above), so the AddToBatch failed and we keep going. 
 			if (q.items.get(ticket) == SENTINEL_TWO) { // gaps
@@ -257,7 +258,7 @@ public class LockFreeVectorWithCombining<T> {
 				q.head.compareAndSet(head, newHead);
 				continue;
 			}
-			
+
 			// The AddToBatch succeeded, so now we'll try to execute the WriteDescriptor's operation.
 			WriteDescriptor<AtomicMarkableReference<T>> writeOp = q.items.get(ticket);
 			if (!writeOp.pending) { // A different thread did it for us, so just update head.
@@ -266,29 +267,29 @@ public class LockFreeVectorWithCombining<T> {
 				q.head.compareAndSet(head, newHead);
 				continue;
 			}
-			
+
 			// Complete writeOp's pending operation.
 			if (writeOp.pending && q.head.get().index == headIndex && q.head.get().count == headCount) {
 				int temp = descr.offset + headCount;
 				vals.get(getBucket(temp)).compareAndSet(getIdxWithinBucket(temp), oldValue, writeOp.newValue);
 			}
-			
+
 			// Update head and mark writeOp as complete.
 			Head newHead = new Head(headIndex + 1, headCount+1);
 			q.head.compareAndSet(head, newHead);
 			writeOp.pending = false;
 		}
-		
+
 		int newSize = descr.offset + headCount;
 		if (descr.opType == OpType.POP) {
 			newSize--;
 		}
 		threadInfo.offset = newSize;
-		
+
 		// Update the descriptor.
 		Descriptor<AtomicMarkableReference<T>> newDesc = new Descriptor<AtomicMarkableReference<T>>(newSize, null, null);
 		desc.compareAndSet(descr, newDesc);
-		
+
 		// This thread was executing a popback, so we need to return the last value we pushed. (If 
 		// this Combine was started by a pushback, we don't return anything, even if this thread was 
 		// performing a popback.)
@@ -298,67 +299,70 @@ public class LockFreeVectorWithCombining<T> {
 			markNode(index); // Mark the node as logically deleted.
 			return elem;
 		}
-		
+
 		return null;
 	}
 
 	T peek() {
 		Descriptor<AtomicMarkableReference<T>> currDesc = desc.get();
-		
+
 		// If there's a current or ready Combine operation, this thread will help complete it.
 		if (currDesc.batch != null) {
 			ThreadInfo<T> threadInfo = threadInfoGlobal.get();
 			combine(threadInfo, currDesc, true);
 		}
-		
+
 		completeWrite(currDesc.writeOp); // Complete any pending operation.
-		
+
 		if (currDesc.size == 0) return null;
 		else return readAt(currDesc.size - 1);
 	}
-
-	void writeAt(int idx, T newValue) {
+	
+	private boolean inBounds(int idx) {
 		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
 		if (idx >= threadInfo.offset) {
 			// Update the local size to match the global descriptor's size.
 			threadInfo.offset = desc.get().size;
 		}
-		if (idx >= threadInfo.offset || vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).
-				isMarked()) {
-			// Out of bounds.
-			return;
+		if (idx >= threadInfo.offset) return false;
+		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)) == null) return true;
+		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).isMarked()) {
+			// Was logically deleted, which is considered out of bounds.
+			return false;
 		}
-		vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).set(newValue, false);
+		return true;
+	}
+
+	boolean writeAt(int idx, T newValue) {
+		if (!inBounds(idx)) return false;
+		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).compareAndSet(readAt(idx), 
+				newValue, false, false)) {
+			return true;
+		}
+		return false;
 	}
 
 	T readAt(int idx) {
-		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
-		if (idx >= threadInfo.offset) {
-			// Update the local size to match the global descriptor's size.
-			threadInfo.offset = desc.get().size;
-		}
-		if (idx >= threadInfo.offset || vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).
-				isMarked()) {
-			// Out of bounds.
-			return null;
-		}
-		return vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).getReference();
+		if (!inBounds(idx)) return null;
+		AtomicMarkableReference<T> ref = readRefAt(idx);
+		if (ref != null) return ref.getReference();
+		else return null;
 	}
 	private AtomicMarkableReference<T> readRefAt(int idx) {
 		// Does not perform bounds checking.
 		return vals.get(getBucket(idx)).get(getIdxWithinBucket(idx));
 	}
-	
+
 	int size() {
 		Descriptor<AtomicMarkableReference<T>> currDesc = desc.get();
 		int size = currDesc.size;
-		
+
 		// If there's a current or ready Combine operation, this thread will help complete it.
 		if (currDesc.batch != null) {
 			ThreadInfo<T> threadInfo = threadInfoGlobal.get();
 			combine(threadInfo, currDesc, true);
 		}
-		
+
 		// Take into account any pending WriteDescriptors.
 		if (currDesc.writeOp != null && currDesc.writeOp.pending) {
 			if (currDesc.opType == OpType.PUSH) size--;
@@ -366,18 +370,18 @@ public class LockFreeVectorWithCombining<T> {
 		}
 		return size;
 	}
-	
+
 	private void markNode(int idx) {
 		vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).attemptMark(readAt(idx), true);
 	}
-	
+
 	// Finish a pending write operation.
 	private void completeWrite(WriteDescriptor<AtomicMarkableReference<T>> writeOp) {
 		if (writeOp != null && writeOp.pending) {
 			// We don't need to loop until it succeeds, because a failure means some other thread
 			// completed it for us.
 			vals.get(getBucket(writeOp.idx)).compareAndSet(getIdxWithinBucket(writeOp.idx),
-					writeOp.newValue, writeOp.oldValue);
+					writeOp.oldValue, writeOp.newValue);
 			writeOp.pending = false;
 		}
 	}
@@ -443,20 +447,20 @@ public class LockFreeVectorWithCombining<T> {
 		AtomicReferenceArray<WriteDescriptor<E>> items;
 		AtomicInteger tail;
 		AtomicReference<Head> head;
-		
+
 		Queue() {
 			items = new AtomicReferenceArray<>(QSize);
 			closed = false;
 			tail = new AtomicInteger(1);
 			head = new AtomicReference<Head>(new Head(0, 0));
 		}
-		
+
 		Queue(WriteDescriptor<E> firstElement) {
 			this();
 			items.set(0, firstElement);
 		}
 	}
-	
+
 	private static class Head {
 		// index is the index of the head point and count indicates the number of successfully 
 		// combined operations.
@@ -474,7 +478,7 @@ public class LockFreeVectorWithCombining<T> {
 	private static class ThreadInfo<T> {
 		Queue<AtomicMarkableReference<T>> q;
 		int offset;
-		
+
 		public ThreadInfo() {
 			q = new Queue<AtomicMarkableReference<T>>();
 			offset = 0;

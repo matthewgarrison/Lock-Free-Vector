@@ -5,7 +5,21 @@ public class LockFreeVector_Testing {
 	 * This class is all very disorganized and haphazard.
 	 */
 
-	public static void main2(String[] args) {
+	public static void main(String[] args) {
+		LockFreeVectorWithCombining<Integer> vec = new LockFreeVectorWithCombining<>();
+		vec.reserve(10);
+		vec.writeAt(5, 100);
+		int size = 20;
+		for (int i = 0; i < size; i++) {
+			int n = (int)(Math.random() * 200);
+			vec.pushBack(n);
+			System.out.println("push " + n);
+		}
+		for (int i = 0; i < size; i++) System.out.println("pop " + vec.popBack());
+		System.out.println("pop empty: " + vec.popBack());
+	}
+	
+	public static void main3(String[] args) {
 		LockFreeVector<Integer> vec = new LockFreeVector<>();
 //		vec.reserve(10);
 //		vec.writeAt(5, 100);
@@ -18,12 +32,22 @@ public class LockFreeVector_Testing {
 //		for (int i = 0; i < size; i++) System.out.println("pop " + vec.popBack());
 //		System.out.println(vec.popBack());
 		
+		int size = 10;
+		for (int i = 0; i < size; i++) {
+			Integer n = (int)(Math.random() * 6);
+			if (n == 0) n = null;
+			vec.pushBack(n);
+			System.out.println("push " + n);
+		}
+		for (int i = 0; i < size; i++) System.out.println("read " + i + ": " + vec.readAt(i));
+		for (int i = 0; i < size; i++) System.out.println("pop " + vec.popBack());
+		System.out.println(vec.popBack());
 	}
 	
 	static final int NUM_THREADS = 8, NUM_OPS = 100, OPS_PER_THREAD = NUM_OPS / NUM_THREADS;
 	// Push: [0, PUSH_THRESHOLD), pop: [PUSH_THRESHOLD, POP_THRESHOLD), size: [POP_THRESHOLD, 1)
 	static final double PUSH_THRESHOLD = 0.5, POP_THRESHOLD = 0.75;
-	public static void main(String[] args) throws InterruptedException {
+	public static void main2(String[] args) throws InterruptedException {
 		Prog_2_LockFreeStack<Integer> stack = new Prog_2_LockFreeStack<>();
 		long startTime = System.currentTimeMillis(), endTime = 0;
 
