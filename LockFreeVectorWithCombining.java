@@ -14,14 +14,19 @@ public class LockFreeVectorWithCombining<T> {
 	 * A Combine operation is considered "ready" once the descriptor's batch value is set (this 
 	 * done by AddToBatch or popback).
 	 * 
-	 * The paper doesn't say when to update threadInfo.offset (except in read() and write()), so I 
+	 * The paper doesn't say when to update ThreadInfo.offset (except in read() and write()), so I 
 	 * update it anywhere doing so doesn't require calling desc.get().size.
+	 * 
+	 * ThreadInfo has both a q and a batch, but batch doesn't appear to ever be used, so I omitted 
+	 * it.
 	 * 
 	 * Additionally, I added a peek() method.
 	 * 
-	 * [[Why does ThreadInfo have two Queues (q and batch)?]]
 	 * [[Does each thread has it's own combining queue? If so, when does that get used vs. the 
 	 * 		global combining queue?]]
+	 * [[For Combine, descr.offset isn't always set - that only happens in popback(). In order for 
+	 * 		the `getBucket(descr.offset + headCount)` to work, we either need to only update size
+	 * 		or we need to check both.]]
 	 */
 	
 	static final int FBS = 2; // First bucket size; can be any power of 2.
@@ -455,12 +460,11 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	private static class ThreadInfo<T> {
-		Queue<AtomicMarkableReference<T>> q, batch;
+		Queue<AtomicMarkableReference<T>> q;
 		int offset;
 		
 		public ThreadInfo() {
 			q = new Queue<AtomicMarkableReference<T>>();
-			batch = new Queue<AtomicMarkableReference<T>>();
 			offset = 0;
 		}
 	}
