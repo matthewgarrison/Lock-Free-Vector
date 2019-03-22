@@ -14,6 +14,8 @@ public class LockFreeVectorWithCombining<T> {
 	 * A Combine operation is considered "ready" once the descriptor's batch value is set (this 
 	 * done by AddToBatch or popback).
 	 * 
+	 * The paper doesn't recommend a specific QSize, so I picked mine fairly arbitrarily.
+	 * 
 	 * The paper doesn't say when to update ThreadInfo.offset (except in read() and write()), so I 
 	 * update it anywhere doing so doesn't require calling desc.get().size.
 	 * 
@@ -30,7 +32,7 @@ public class LockFreeVectorWithCombining<T> {
 	 */
 	
 	static final int FBS = 2; // First bucket size; can be any power of 2.
-	static final int QSize = -1; // Size of the bounded combining queue.
+	static final int QSize = 16; // Size of the bounded combining queue.
 	AtomicReference<Descriptor<AtomicMarkableReference<T>>> desc;
 	AtomicReferenceArray<AtomicReferenceArray<AtomicMarkableReference<T>>> vals;
 	AtomicReference<Queue<AtomicMarkableReference<T>>> batch;
@@ -39,8 +41,18 @@ public class LockFreeVectorWithCombining<T> {
 
 	public LockFreeVectorWithCombining() {
 		desc = new AtomicReference<Descriptor<AtomicMarkableReference<T>>>(new Descriptor<>(0, null, null));
+		
 		vals = new AtomicReferenceArray<AtomicReferenceArray<AtomicMarkableReference<T>>>(32);
 		vals.getAndSet(0, new AtomicReferenceArray<AtomicMarkableReference<T>>(FBS));
+		
+		threadInfoGlobal = new ThreadLocal<>() {
+			@Override protected ThreadInfo<T> initialValue() {
+				return new ThreadInfo<T>();
+			}
+		};
+		
+		batch = null; // The combining queue is initially null.
+		
 		SENTINEL_ONE = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -1);
 		SENTINEL_TWO = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -2);
 	}
@@ -138,7 +150,7 @@ public class LockFreeVectorWithCombining<T> {
 				combine(threadInfo, currDesc, true);
 			}
 			
-			if (currDesc.size == 0 && batch == null) return null; // There's nothing to pop.
+			if (currDesc.size == 0 && batch.get() == null) return null; // There's nothing to pop.
 			elem = readAt(currDesc.size - 1);
 
 			// Create a new Descriptor.
