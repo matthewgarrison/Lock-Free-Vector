@@ -27,9 +27,6 @@ public class LockFreeVectorWithCombining<T> {
 	 * 
 	 * [[Does each thread has it's own combining queue? If so, when does that get used vs. the 
 	 * 		global combining queue?]]
-	 * [[For Combine, descr.offset isn't always set - that only happens in popback(). In order for 
-	 * 		the `getBucket(descr.offset + headCount)` to work, we either need to only update size
-	 * 		or we need to check both.]]
 	 */
 
 	static final int FBS = 2; // First bucket size; can be any power of 2.
@@ -157,7 +154,7 @@ public class LockFreeVectorWithCombining<T> {
 			// Create a new Descriptor.
 			newDesc = new Descriptor<>(currDesc.size - 1, null, OpType.POP);
 			newDesc.batch = batch.get(); // This signals that the Combine operation should start.
-			newDesc.offset = currDesc.size;
+			newDesc.offset = currDesc.size; // The size of the vector, without this pop.
 
 			if (desc.compareAndSet(currDesc, newDesc)) {
 				if (newDesc.batch != null && newDesc.batch == batch.get()) {
@@ -192,6 +189,7 @@ public class LockFreeVectorWithCombining<T> {
 		if (queue == null || queue.closed) {
 			// We don't add descr, because the queue is closed or non-existent.
 			descr.batch = queue;
+			descr.offset = descr.size - 1; // The size of the vector, without descr's push.
 			return false;
 		}
 
@@ -200,6 +198,7 @@ public class LockFreeVectorWithCombining<T> {
 			// The queue is full, so close it and return a failure.
 			queue.closed = true;
 			descr.batch = queue;
+			descr.offset = descr.size - 1; // The size of the vector, without descr's push.
 			return false;
 		}
 
@@ -416,6 +415,9 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	private static class Descriptor<E> {
+		// offset is the size of the vector at the start of the combining phase. (This is not the 
+		// same as size, which is the size of the vector after writeOp, if present, has been 
+		// completed.)
 		int size, offset;
 		WriteDescriptor<E> writeOp;
 		Queue<E> batch;
@@ -423,7 +425,7 @@ public class LockFreeVectorWithCombining<T> {
 
 		Descriptor(int _size, WriteDescriptor<E> _writeOp, OpType _opType) {
 			size = _size;
-			offset = 0;
+			offset = -1;
 			writeOp = _writeOp;
 			opType = _opType;
 			batch = null;
