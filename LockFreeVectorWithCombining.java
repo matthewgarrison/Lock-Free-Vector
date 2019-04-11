@@ -16,11 +16,12 @@ public class LockFreeVectorWithCombining<T> {
 	 * 
 	 * The paper doesn't recommend a specific QSize, so I picked mine fairly arbitrarily.
 	 * 
-	 * The paper doesn't say when to update ThreadInfo.offset (except in read() and write()), so I 
-	 * update it anywhere doing so doesn't require calling desc.get().size.
-	 * 
-	 * ThreadInfo has both a q and a batch, but batch doesn't appear to ever be used, so I omitted 
-	 * it.
+	 * ThreadInfo
+	 * 		- I renamed offset to size, for consistency with other naming.
+	 * 		- The paper doesn't say when to update size (except in read() and write()), so I update 
+	 * 		  it anywhere doing so doesn't require calling desc.get().size.
+	 * 		- ThreadInfo has both a q and a batch, but batch doesn't appear to ever be used, so I omitted 
+	 * 		  it.
 	 * 
 	 * Additionally, I added a peek() method.
 	 * 
@@ -132,7 +133,7 @@ public class LockFreeVectorWithCombining<T> {
 		}
 
 		completeWrite(newDesc.writeOp);
-		threadInfo.offset = newDesc.size;
+		threadInfo.size = newDesc.size;
 	}
 
 	T popBack() {
@@ -172,7 +173,7 @@ public class LockFreeVectorWithCombining<T> {
 			}
 		}
 
-		threadInfo.offset = newDesc.size;
+		threadInfo.size = newDesc.size;
 		return elem;
 	}
 
@@ -214,7 +215,7 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean 
-			startedByPushback) {
+			startedByPushbackOrOtherThread) {
 		Queue<AtomicMarkableReference<T>> q = batch.get();
 		int headIndex, headCount;
 
@@ -284,16 +285,16 @@ public class LockFreeVectorWithCombining<T> {
 		if (descr.opType == OpType.POP) {
 			newSize--;
 		}
-		threadInfo.offset = newSize;
+		threadInfo.size = newSize;
 
 		// Update the descriptor.
 		Descriptor<AtomicMarkableReference<T>> newDesc = new Descriptor<AtomicMarkableReference<T>>(newSize, null, null);
 		desc.compareAndSet(descr, newDesc);
 
-		// This thread was executing a popback, so we need to return the last value we pushed. (If 
-		// this Combine was started by a pushback, we don't return anything, even if this thread was 
-		// performing a popback.)
-		if (!startedByPushback) {
+		// This thread started the Combine and is executing a popback, so we need to return the last 
+		// value we pushed. (If this Combine was started by a pushback or a different thread's 
+		// popback, we don't return anything.)
+		if (!startedByPushbackOrOtherThread) {
 			int index = descr.offset + headCount;
 			T elem = readAt(index);
 			markNode(index); // Mark the node as logically deleted.
@@ -320,11 +321,11 @@ public class LockFreeVectorWithCombining<T> {
 	
 	private boolean inBounds(int idx) {
 		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
-		if (idx >= threadInfo.offset) {
+		if (idx >= threadInfo.size) {
 			// Update the local size to match the global descriptor's size.
-			threadInfo.offset = desc.get().size;
+			threadInfo.size = desc.get().size;
 		}
-		if (idx >= threadInfo.offset) return false;
+		if (idx >= threadInfo.size) return false;
 		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)) == null) return true;
 		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).isMarked()) {
 			// Was logically deleted, which is considered out of bounds.
@@ -477,11 +478,11 @@ public class LockFreeVectorWithCombining<T> {
 
 	private static class ThreadInfo<T> {
 		Queue<AtomicMarkableReference<T>> q;
-		int offset;
+		int size;
 
 		public ThreadInfo() {
 			q = new Queue<AtomicMarkableReference<T>>();
-			offset = 0;
+			size = 0;
 		}
 	}
 }
