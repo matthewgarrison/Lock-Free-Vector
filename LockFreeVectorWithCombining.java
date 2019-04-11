@@ -214,7 +214,7 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean 
-			startedByPushbackOrOtherThread) {
+			dontNeedToReturn) {
 		Queue<AtomicMarkableReference<T>> q = batch.get();
 		int headIndex, headCount;
 
@@ -252,7 +252,7 @@ public class LockFreeVectorWithCombining<T> {
 
 			// One of the others threads helping with this Combine operation succeeded in the CAS
 			// (see above), so the AddToBatch failed and we keep going. 
-			if (q.items.get(ticket) == SENTINEL_TWO) { // gaps
+			if (q.items.get(ticket) == SENTINEL_TWO) {
 				Head newHead = new Head(headIndex + 1, headCount); 
 				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
 				q.head.compareAndSet(head, newHead);
@@ -280,6 +280,7 @@ public class LockFreeVectorWithCombining<T> {
 			writeOp.pending = false;
 		}
 
+		// Set the size of the vector after all of the pushes are complete.
 		int newSize = descr.offset + headCount;
 		if (descr.opType == OpType.POP) {
 			newSize--;
@@ -293,7 +294,7 @@ public class LockFreeVectorWithCombining<T> {
 		// This thread started the Combine and is executing a popback, so we need to return the last 
 		// value we pushed. (If this Combine was started by a pushback or a different thread's 
 		// popback, we don't return anything.)
-		if (!startedByPushbackOrOtherThread) {
+		if (!dontNeedToReturn) {
 			int index = descr.offset + headCount;
 			T elem = readAt(index);
 			markNode(index); // Mark the node as logically deleted.
