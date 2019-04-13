@@ -35,7 +35,7 @@ public class LockFreeVectorWithCombining<T> {
 	AtomicReferenceArray<AtomicReferenceArray<AtomicMarkableReference<T>>> vals;
 	AtomicReference<Queue<AtomicMarkableReference<T>>> batch;
 	ThreadLocal<ThreadInfo<T>> threadInfoGlobal;
-	WriteDescriptor<AtomicMarkableReference<T>> SENTINEL_ONE, SENTINEL_TWO;
+	WriteDescriptor<AtomicMarkableReference<T>> EMPTY_SLOT, FINISHED_SLOT;
 
 	public LockFreeVectorWithCombining() {
 		desc = new AtomicReference<Descriptor<AtomicMarkableReference<T>>>(new Descriptor<>(0, null, null));
@@ -51,8 +51,8 @@ public class LockFreeVectorWithCombining<T> {
 
 		batch = new AtomicReference<>(null);
 
-		SENTINEL_ONE = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -1);
-		SENTINEL_TWO = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -2);
+		EMPTY_SLOT = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -1);
+		FINISHED_SLOT = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -2);
 	}
 
 	void reserve(int newSize) {
@@ -117,7 +117,7 @@ public class LockFreeVectorWithCombining<T> {
 					// AddToBatch set the descriptor's queue, which only happens when we're ready 
 					// to combine.
 					combine(threadInfo, newDesc, true);
-					if (help) { // [[We're going to help another thread, I guess?]]
+					if (help) {
 						help = false;
 						continue;
 					}
@@ -147,8 +147,8 @@ public class LockFreeVectorWithCombining<T> {
 			if (currDesc.batch != null) {
 				combine(threadInfo, currDesc, true);
 			}
-
 			if (currDesc.size == 0 && batch.get() == null) return null; // There's nothing to pop.
+
 			elem = readAt(currDesc.size - 1);
 
 			// Create a new Descriptor.
@@ -202,7 +202,7 @@ public class LockFreeVectorWithCombining<T> {
 			return false;
 		}
 
-		if (!queue.items.compareAndSet(ticket, SENTINEL_ONE, writeOp)) { // Add it to the queue.
+		if (!queue.items.compareAndSet(ticket, EMPTY_SLOT, writeOp)) { // Add it to the queue.
 			return false; // We failed; someone stole our spot.
 		}
 
@@ -243,7 +243,7 @@ public class LockFreeVectorWithCombining<T> {
 
 			// If our CAS succeeds, then the corresponding AddToBatch operation has not finished 
 			// adding the item to the combining queue, so we just keep going.
-			if (q.items.compareAndSet(ticket, SENTINEL_ONE, SENTINEL_TWO)) {
+			if (q.items.compareAndSet(ticket, EMPTY_SLOT, FINISHED_SLOT)) {
 				Head newHead = new Head(headIndex + 1, headCount);
 				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
 				q.head.compareAndSet(head, newHead);
@@ -252,7 +252,7 @@ public class LockFreeVectorWithCombining<T> {
 
 			// One of the others threads helping with this Combine operation succeeded in the CAS
 			// (see above), so the AddToBatch failed and we keep going. 
-			if (q.items.get(ticket) == SENTINEL_TWO) {
+			if (q.items.get(ticket) == FINISHED_SLOT) {
 				Head newHead = new Head(headIndex + 1, headCount); 
 				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
 				q.head.compareAndSet(head, newHead);
@@ -290,6 +290,9 @@ public class LockFreeVectorWithCombining<T> {
 		// Update the descriptor.
 		Descriptor<AtomicMarkableReference<T>> newDesc = new Descriptor<AtomicMarkableReference<T>>(newSize, null, null);
 		desc.compareAndSet(descr, newDesc);
+		
+		// Nullify the combining queue, so we are ready for next time.
+		batch.compareAndSet(q, null);
 
 		// This thread started the Combine and is executing a popback, so we need to return the last 
 		// value we pushed. (If this Combine was started by a pushback or a different thread's 
