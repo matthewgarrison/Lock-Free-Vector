@@ -180,6 +180,7 @@ public class LockFreeVectorWithCombining<T> {
 		// Check if the vector has a combining queue already. If not, we'll make one.
 		if (queue == null) {
 			Queue<AtomicMarkableReference<T>> newQ = new Queue<>(writeOp);
+			newQ.fill(EMPTY_SLOT);
 			if (batch.compareAndSet(queue, newQ)) {
 				return true;
 			}
@@ -465,6 +466,15 @@ public class LockFreeVectorWithCombining<T> {
 		Queue(WriteDescriptor<E> firstElement) {
 			this();
 			items.set(0, firstElement);
+		}
+		
+		// fill(EMPTY_SLOT) must be called  immediately after initializing a Queue. (It's a separate 
+		// method because you cannot reference the non-static value EMPTY_SLOT within the constructor
+		// of the static class Queue.)
+		void fill(WriteDescriptor<E> val) {
+			for (int i = 0; i < items.length(); i++) {
+				items.set(i, val);
+			}
 		}
 	}
 
