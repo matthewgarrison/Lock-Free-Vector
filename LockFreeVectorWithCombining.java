@@ -22,7 +22,7 @@ public class LockFreeVectorWithCombining<T> {
 	 * 
 	 * Additionally, I added a peek() method.
 	 * 
-	 * [[Does each thread has it's own combining queue? If so, when does that get used vs. the 
+	 * [[Does each thread have its own combining queue? If so, when does that get used vs. the 
 	 * 		global combining queue?]]
 	 */
 
@@ -157,7 +157,7 @@ public class LockFreeVectorWithCombining<T> {
 				if (newDesc.batch != null && newDesc.batch == batch.get()) {
 					// We need to execute any pending pushes before we can pop. Then we'll return 
 					// the last element added to the vector by Combine.
-					threadInfo.q.closed = true;
+					newDesc.batch.closed = true;
 					elem = combine(threadInfo, newDesc, false);
 				} else {
 					// Mark the node as logically deleted.
