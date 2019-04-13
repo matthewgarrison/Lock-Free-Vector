@@ -8,9 +8,6 @@ public class LockFreeVectorWithCombining<T> {
 	/*
 	 * Based on Walulya at al.'s lock-free vector paper.
 	 * 
-	 * I think I can do CAS(e, u, false, false) - if a node is ever marked, then we can let the 
-	 * CAS fail because the value doesn't matter (ie. the node was deleted).
-	 * 
 	 * A Combine operation is considered "ready" once the descriptor's batch value is set (this 
 	 * done by AddToBatch or popback).
 	 * 
@@ -340,6 +337,9 @@ public class LockFreeVectorWithCombining<T> {
 
 	boolean writeAt(int idx, T newValue) {
 		if (!inBounds(idx)) return false;
+		// When CASing the new value, the expected mark must be false -- if not, the node has been 
+		// deleted between the inBounds() call above and the CAS. A logically deleted node is 
+		// considered out of bounds.
 		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).compareAndSet(readAt(idx), 
 				newValue, false, false)) {
 			return true;
@@ -468,7 +468,7 @@ public class LockFreeVectorWithCombining<T> {
 			items.set(0, firstElement);
 		}
 		
-		// fill(EMPTY_SLOT) must be called  immediately after initializing a Queue. (It's a separate 
+		// fill(EMPTY_SLOT) must be called immediately after initializing a Queue. (It's a separate 
 		// method because you cannot reference the non-static value EMPTY_SLOT within the constructor
 		// of the static class Queue.)
 		void fill(WriteDescriptor<E> val) {
