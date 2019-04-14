@@ -51,6 +51,12 @@ public class LockFreeVectorWithCombining<T> {
 		EMPTY_SLOT = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -1);
 		FINISHED_SLOT = new WriteDescriptor<AtomicMarkableReference<T>>(null, null, -2);
 	}
+	
+	public LockFreeVectorWithCombining(int size) {
+		this();
+		reserve(size);
+		desc.get().size = size;
+	}
 
 	void reserve(int newSize) {
 		// The -1 is used because getBucket() finds the bucket for a given index. Since we're 
@@ -340,6 +346,10 @@ public class LockFreeVectorWithCombining<T> {
 		// When CASing the new value, the expected mark must be false -- if not, the node has been 
 		// deleted between the inBounds() call above and the CAS. A logically deleted node is 
 		// considered out of bounds.
+		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)) == null) {
+			vals.get(getBucket(idx)).set(getIdxWithinBucket(idx), new 
+					AtomicMarkableReference<>(newValue, false));
+		}
 		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).compareAndSet(readAt(idx), 
 				newValue, false, false)) {
 			return true;
@@ -377,6 +387,7 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	private void markNode(int idx) {
+		if (vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)) == null) return;
 		vals.get(getBucket(idx)).get(getIdxWithinBucket(idx)).attemptMark(readAt(idx), true);
 	}
 
