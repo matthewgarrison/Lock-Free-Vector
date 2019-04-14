@@ -33,7 +33,7 @@ public class LockFreeVectorWithCombining<T> {
 	 */
 
 	static final int FBS = 2; // First bucket size; can be any power of 2.
-	static final int QSize = 16; // Size of the bounded combining queue.
+	static final int QSize = 4; // Size of the bounded combining queue.
 	AtomicReference<Descriptor<AtomicMarkableReference<T>>> desc;
 	AtomicReferenceArray<AtomicReferenceArray<AtomicMarkableReference<T>>> vals;
 	AtomicReference<Queue<AtomicMarkableReference<T>>> batch;
@@ -80,7 +80,7 @@ public class LockFreeVectorWithCombining<T> {
 	}
 
 	void pushBack(T newElement) {
-		boolean willAddToBatch = false, help = false;
+		boolean willAddToBatch = false, helpWithCombine = false;
 		Descriptor<AtomicMarkableReference<T>> currDesc, newDesc;
 		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
 		AtomicMarkableReference<T> newRef = new AtomicMarkableReference<>(newElement, false);
@@ -112,11 +112,13 @@ public class LockFreeVectorWithCombining<T> {
 				if (addToBatch(threadInfo, newDesc, writeOp)) {
 					return; // The operation was added to the queue, so we're done here.
 				}
-				// We couldn't add it to the queue.
-				// [[Not sure why we set newDesc.writeOp to null - we didn't add it to the queue, 
-				// so where did it go?]]
-				newDesc = new Descriptor<AtomicMarkableReference<T>>(currDesc.size, null, null);
-				help = true;
+				// We couldn't add it to the queue. Therefore, we'll try to help with the Combine 
+				// that is happening. If the CAS below succeeds, we'll do another loop (because 
+				// helpWithCombine is true) and add newElement then. If it fails, we'll do another
+				// loop and add writeOp to a new combining queue (because willAddToBatch is true).
+				newDesc.size = currDesc.size;
+				newDesc.writeOp = null;
+				helpWithCombine = true;
 				threadInfo.q = null;
 			}
 
@@ -126,8 +128,11 @@ public class LockFreeVectorWithCombining<T> {
 					// AddToBatch set the descriptor's queue, which only happens when we're ready 
 					// to combine.
 					combine(threadInfo, newDesc, true);
-					if (help) {
-						help = false;
+					if (helpWithCombine) {
+						// We failed the AddToBatch above, so now that we're done helping with 
+						// Combine, we're going to do another loop (because we haven't added 
+						// writeOp to the vector/combining queue yet).
+						helpWithCombine = false;
 						continue;
 					}
 				}
@@ -145,7 +150,7 @@ public class LockFreeVectorWithCombining<T> {
 	T popBack() {
 		Descriptor<AtomicMarkableReference<T>> currDesc, newDesc;
 		ThreadInfo<T> threadInfo = threadInfoGlobal.get();
-		T elem;
+		T elem = null;
 		while (true) {
 			currDesc = desc.get();
 
@@ -156,14 +161,23 @@ public class LockFreeVectorWithCombining<T> {
 			if (currDesc.batch != null) {
 				combine(threadInfo, currDesc, true);
 			}
+			
 			if (currDesc.size == 0 && batch.get() == null) return null; // There's nothing to pop.
 
-			elem = readAt(currDesc.size - 1);
+			if (currDesc.size == 0) {
+				// The vector is empty, but there's stuff in the combining queue, so we keep going.
+				elem = null; 
+			} else {
+				// Use readRefAt (which has no bounds checking) to get the reference, then extract 
+				// the value (if it exists).
+				AtomicMarkableReference<T> ref = readRefAt(currDesc.size - 1);
+				if (ref != null) elem = ref.getReference();
+			}
 
 			// Create a new Descriptor.
 			newDesc = new Descriptor<>(currDesc.size - 1, null, OpType.POP);
-			newDesc.batch = batch.get(); // This signals that the Combine operation should start.
 			newDesc.offset = currDesc.size; // The size of the vector, without this pop.
+			newDesc.batch = batch.get(); // This signals that the Combine operation should start.
 
 			if (desc.compareAndSet(currDesc, newDesc)) {
 				if (newDesc.batch != null && newDesc.batch == batch.get()) {
@@ -199,21 +213,19 @@ public class LockFreeVectorWithCombining<T> {
 		if (queue == null || queue.closed) {
 			// We don't add descr, because the queue is closed or non-existent.
 			descr.batch = queue;
-			descr.offset = descr.size - 1; // The size of the vector, without descr's push.
 			return false;
 		}
 
-		int ticket = queue.tail.getAndAdd(1); // Where we'll insert into the queue.
+		int ticket = queue.tail.getAndIncrement(); // Where we'll insert into the queue.
 		if (ticket >= QSize) {
 			// The queue is full, so close it and return a failure.
 			queue.closed = true;
 			descr.batch = queue;
-			descr.offset = descr.size - 1; // The size of the vector, without descr's push.
 			return false;
 		}
 
 		if (!queue.items.compareAndSet(ticket, EMPTY_SLOT, writeOp)) { // Add it to the queue.
-			return false; // We failed; someone stole our spot.
+			return false; // We failed because of an interfering Combine operation.
 		}
 
 		// [[What's the point of this? We don't do anything with it.]]
@@ -227,6 +239,11 @@ public class LockFreeVectorWithCombining<T> {
 			dontNeedToReturn) {
 		Queue<AtomicMarkableReference<T>> q = batch.get();
 		int headIndex, headCount;
+		
+		// Since offset isn't set, we know this Combine was triggered by a pushback. And since we 
+		// know pushback will set newDesc.size=currDesc.size when it triggers a Combine, that's what 
+		// we'll set offset to.
+		if (descr.offset == -1) descr.offset = descr.size;
 
 		if (q == null || !q.closed) { // [[The paper has an AND here, which I don't think makes sense?]]
 			return null; // The queue is not closed, so the combining phase is finished.
@@ -298,7 +315,8 @@ public class LockFreeVectorWithCombining<T> {
 		threadInfo.size = newSize;
 
 		// Update the descriptor.
-		Descriptor<AtomicMarkableReference<T>> newDesc = new Descriptor<AtomicMarkableReference<T>>(newSize, null, null);
+		Descriptor<AtomicMarkableReference<T>> newDesc = new Descriptor<AtomicMarkableReference<T>>
+				(newSize, null, null);
 		desc.compareAndSet(descr, newDesc);
 		
 		// Nullify the combining queue, so we are ready for next time.
@@ -438,7 +456,7 @@ public class LockFreeVectorWithCombining<T> {
 
 	private static class Descriptor<E> {
 		// offset is the size of the vector at the start of the combining phase. (This is not the 
-		// same as size, which is the size of the vector after writeOp, if present, has been 
+		// same as size, which is the size of the vector after writeOp, if it exists, has been 
 		// completed.)
 		int size, offset;
 		WriteDescriptor<E> writeOp;
