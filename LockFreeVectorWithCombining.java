@@ -11,6 +11,12 @@ public class LockFreeVectorWithCombining<T> {
 	 * A Combine operation is considered "ready" once the descriptor's batch value is set (this 
 	 * done by AddToBatch or popback).
 	 * 
+	 * A note on the second constructor and reserve(): In std::vector, you can use reserve to 
+	 * allocate memory and then write to that memory. However, due to the way the bounds checking 
+	 * operates, you cannot do that with this vector. If you wish to use this vector like an array, 
+	 * you must use the the second constructor or pushback enough times to create a vector of the 
+	 * required size.
+	 * 
 	 * The paper doesn't recommend a specific QSize, so I picked mine fairly arbitrarily.
 	 * 
 	 * ThreadInfo
