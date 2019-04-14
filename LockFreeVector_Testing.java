@@ -5,9 +5,12 @@ public class LockFreeVector_Testing {
 	 * This class is all very disorganized and gross. Please ignore.
 	 */
 
-	public static void main2(String[] args) {
+	public static void main(String[] args) {
 		LockFreeVectorWithCombining<Integer> vec = new LockFreeVectorWithCombining<>();
 		vec.reserve(10);
+		System.out.println("write 5,100: " + vec.writeAt(5, 100));
+		System.out.println("read 5: " + vec.readAt(5));
+		vec = new LockFreeVectorWithCombining<>(10);
 		System.out.println("write 5,100: " + vec.writeAt(5, 100));
 		System.out.println("read 5: " + vec.readAt(5));
 		int size = 20;
@@ -20,7 +23,7 @@ public class LockFreeVector_Testing {
 		System.out.println("pop empty: " + vec.popBack());
 	}
 	
-	public static void main(String[] args) {
+	public static void main2(String[] args) {
 		LockFreeVector<Integer> vec = new LockFreeVector<>(10);
 		for (int i = 0; i < 10; i++) System.out.println(vec.readAt(i));
 		for (int i = 0; i < 10; i++) vec.writeAt(i, i*6);
