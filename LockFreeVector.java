@@ -25,10 +25,15 @@ public class LockFreeVector<T> {
 	 * Additionally, I added a peek() method.
 	 * 
 	 * How the binary math works:
-	 * 		getBucket(): The index of the bucket to use is the index of the highest one bit (accounting
-	 * 			for the FBS), ie. the largest power of 2 in the binary representation of i.
-	 * 		getIdxWithinBucket(): The index within the bucket is i, with the first one bit turned off (since 
-	 * 			(that bit is used to determine which bucket to use).
+	 * 		getBucket(): The index of the bucket to use is the index of the highest one bit 
+	 * 			(accounting for the FBS), ie. the largest power of 2 in the binary representation 
+	 * 			of i.
+	 * 		getIdxWithinBucket(): The index within the bucket is i, with the first one bit turned 
+	 * 			off (since that bit is used to determine which bucket to use).
+	 * 
+	 * Possible issue: Does the ABA problem occur with cached, boxed primitives? eg. for Integers, 
+	 * two numbers will be the same object if their value is on [-128, 127] (and they were 
+	 * autoboxed from ints).
 	 */
 
 	static final int FBS = 2; // First bucket size; can be any power of 2.
