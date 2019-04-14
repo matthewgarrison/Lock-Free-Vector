@@ -40,6 +40,12 @@ public class LockFreeVector<T> {
 		vals = new AtomicReferenceArray<AtomicReferenceArray<T>>(32);
 		vals.getAndSet(0, new AtomicReferenceArray<T>(FBS));
 	}
+	
+	public LockFreeVector(int size) {
+		this();
+		reserve(size);
+		desc.get().size = size;
+	}
 
 	void reserve(int newSize) {
 		// The -1 is used because getBucket() finds the bucket for a given index. Since we're 
