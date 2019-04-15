@@ -27,13 +27,10 @@ public class LockFreeVectorWithCombining<T> {
 	 * 		  it.
 	 * 
 	 * Additionally, I added a peek() method.
-	 * 
-	 * [[Does each thread have its own combining queue? If so, when does that get used vs. the 
-	 * 		global combining queue?]]
 	 */
 
 	static final int FBS = 2; // First bucket size; can be any power of 2.
-	static final int QSize = 4; // Size of the bounded combining queue.
+	static final int QSize = 16; // Size of the bounded combining queue.
 	AtomicReference<Descriptor<AtomicMarkableReference<T>>> desc;
 	AtomicReferenceArray<AtomicReferenceArray<AtomicMarkableReference<T>>> vals;
 	AtomicReference<Queue<AtomicMarkableReference<T>>> batch;
@@ -107,7 +104,7 @@ public class LockFreeVectorWithCombining<T> {
 
 			// If our CAS failed (in a previous loop iteration) or this thread has already added 
 			// items to the queue, then we'll try to add this operation to the queue. (Once we add 
-			// one operation to the queue, we'll keep doing so until that queue closes.)
+			// one push to the queue, we'll keep doing so until that queue closes.)
 			if (willAddToBatch || (threadInfo.q != null && threadInfo.q == batch.get())) {
 				if (addToBatch(threadInfo, newDesc, writeOp)) {
 					return; // The operation was added to the queue, so we're done here.
@@ -205,6 +202,7 @@ public class LockFreeVectorWithCombining<T> {
 			Queue<AtomicMarkableReference<T>> newQ = new Queue<>(writeOp);
 			newQ.fill(EMPTY_SLOT);
 			if (batch.compareAndSet(queue, newQ)) {
+				threadInfo.q = newQ;
 				return true;
 			}
 		}
@@ -228,10 +226,8 @@ public class LockFreeVectorWithCombining<T> {
 			return false; // We failed because of an interfering Combine operation.
 		}
 
-		// [[What's the point of this? We don't do anything with it.]]
-		Queue<AtomicMarkableReference<T>> newQ = new Queue<>(writeOp);
-
-		// We successfully added the operation to the queue.
+		// We successfully added the operation to the queue. Update our thread-local queue's value.
+		threadInfo.q = queue;
 		return true;
 	}
 
