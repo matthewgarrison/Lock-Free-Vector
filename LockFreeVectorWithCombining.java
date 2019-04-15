@@ -233,7 +233,7 @@ public class LockFreeVectorWithCombining<T> {
 
 	T combine(ThreadInfo<T> threadInfo, Descriptor<AtomicMarkableReference<T>> descr, boolean 
 			dontNeedToReturn) {
-		Queue<AtomicMarkableReference<T>> q = batch.get();
+		Queue<AtomicMarkableReference<T>> queue = batch.get();
 		int headIndex, headCount;
 		
 		// Since offset isn't set, we know this Combine was triggered by a pushback. And since we 
@@ -241,13 +241,13 @@ public class LockFreeVectorWithCombining<T> {
 		// we'll set offset to.
 		if (descr.offset == -1) descr.offset = descr.size;
 
-		if (q == null || !q.closed) { // [[The paper has an AND here, which I don't think makes sense?]]
+		if (queue == null || !queue.closed) { // [[The paper has an AND here, which I don't think makes sense?]]
 			return null; // The queue is not closed, so the combining phase is finished.
 		}
 
 		// We dequeue operations and execute them.
 		while (true) {
-			Head head = q.head.get();
+			Head head = queue.head.get();
 			headIndex = head.index;
 			headCount = head.count;
 
@@ -260,46 +260,46 @@ public class LockFreeVectorWithCombining<T> {
 
 			AtomicMarkableReference<T> oldValue = readRefAt(descr.offset + headCount);
 			int ticket = headIndex;
-			if (ticket == q.tail.get() || ticket == QSize) {
+			if (ticket == queue.tail.get() || ticket == QSize) {
 				break; // We executed every operation in the queue.
 			}
 
 			// If our CAS succeeds, then the corresponding AddToBatch operation has not finished 
 			// adding the item to the combining queue, so we just keep going.
-			if (q.items.compareAndSet(ticket, EMPTY_SLOT, FINISHED_SLOT)) {
+			if (queue.items.compareAndSet(ticket, EMPTY_SLOT, FINISHED_SLOT)) {
 				Head newHead = new Head(headIndex + 1, headCount);
 				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
-				q.head.compareAndSet(head, newHead);
+				queue.head.compareAndSet(head, newHead);
 				continue;
 			}
 
 			// One of the others threads helping with this Combine operation succeeded in the CAS
 			// (see above), so the AddToBatch failed and we keep going. 
-			if (q.items.get(ticket) == FINISHED_SLOT) {
+			if (queue.items.get(ticket) == FINISHED_SLOT) {
 				Head newHead = new Head(headIndex + 1, headCount); 
 				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
-				q.head.compareAndSet(head, newHead);
+				queue.head.compareAndSet(head, newHead);
 				continue;
 			}
 
 			// The AddToBatch succeeded, so now we'll try to execute the WriteDescriptor's operation.
-			WriteDescriptor<AtomicMarkableReference<T>> writeOp = q.items.get(ticket);
+			WriteDescriptor<AtomicMarkableReference<T>> writeOp = queue.items.get(ticket);
 			if (!writeOp.pending) { // A different thread did it for us, so just update head.
 				Head newHead = new Head(headIndex + 1, headCount+1);
 				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
-				q.head.compareAndSet(head, newHead);
+				queue.head.compareAndSet(head, newHead);
 				continue;
 			}
 
 			// Complete writeOp's pending operation.
-			if (writeOp.pending && q.head.get().index == headIndex && q.head.get().count == headCount) {
+			if (writeOp.pending && queue.head.get().index == headIndex && queue.head.get().count == headCount) {
 				int temp = descr.offset + headCount;
 				vals.get(getBucket(temp)).compareAndSet(getIdxWithinBucket(temp), oldValue, writeOp.newValue);
 			}
 
 			// Update head and mark writeOp as complete.
 			Head newHead = new Head(headIndex + 1, headCount+1);
-			q.head.compareAndSet(head, newHead);
+			queue.head.compareAndSet(head, newHead);
 			writeOp.pending = false;
 		}
 
@@ -316,7 +316,7 @@ public class LockFreeVectorWithCombining<T> {
 		desc.compareAndSet(descr, newDesc);
 		
 		// Nullify the combining queue, so we are ready for next time.
-		batch.compareAndSet(q, null);
+		batch.compareAndSet(queue, null);
 
 		// This thread started the Combine and is executing a popback, so we need to return the last 
 		// value we pushed. (If this Combine was started by a pushback or a different thread's 
