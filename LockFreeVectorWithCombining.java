@@ -199,8 +199,9 @@ public class LockFreeVectorWithCombining<T> {
 		Queue<AtomicMarkableReference<T>> queue = batch.get();
 		// Check if the vector has a combining queue already. If not, we'll make one.
 		if (queue == null) {
-			Queue<AtomicMarkableReference<T>> newQ = new Queue<>(writeOp);
+			Queue<AtomicMarkableReference<T>> newQ = new Queue<>();
 			newQ.fill(EMPTY_SLOT);
+			newQ.items.set(0, writeOp);
 			if (batch.compareAndSet(queue, newQ)) {
 				threadInfo.q = newQ;
 				return true;
@@ -492,11 +493,6 @@ public class LockFreeVectorWithCombining<T> {
 			closed = false;
 			tail = new AtomicInteger(1);
 			head = new AtomicReference<Head>(new Head(0, 0));
-		}
-
-		Queue(WriteDescriptor<E> firstElement) {
-			this();
-			items.set(0, firstElement);
 		}
 		
 		// fill(EMPTY_SLOT) must be called immediately after initializing a Queue. (It's a separate 
