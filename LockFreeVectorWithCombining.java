@@ -242,7 +242,7 @@ public class LockFreeVectorWithCombining<T> {
 		// we'll set offset to.
 		if (descr.offset == -1) descr.offset = descr.size;
 
-		if (queue == null || !queue.closed) { // [[The paper has an AND here, which I don't think makes sense?]]
+		if (queue == null || !queue.closed) { // [[The paper has an AND here, which is a typo.]]
 			return null; // The queue is not closed, so the combining phase is finished.
 		}
 
@@ -253,8 +253,7 @@ public class LockFreeVectorWithCombining<T> {
 			headCount = head.count;
 
 			// Determine which bucket this element will go in.
-			// [[The paper uses a variable called cur_count, but that's not referenced anywhere else, 
-			// so I think they mean headCount.]]
+			// [[The paper uses a variable called cur_count here, but it's meant to be headCount.]]
 			int bucketIdx = getBucket(descr.offset + headCount);
 			// If the appropriate bucket doesn't exist, create it.
 			if (vals.get(bucketIdx) == null) allocateBucket(bucketIdx);
@@ -269,7 +268,7 @@ public class LockFreeVectorWithCombining<T> {
 			// adding the item to the combining queue, so we just keep going.
 			if (queue.items.compareAndSet(ticket, EMPTY_SLOT, FINISHED_SLOT)) {
 				Head newHead = new Head(headIndex + 1, headCount);
-				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
+				// [[The paper updates tail here, but that's a typo.]]
 				queue.head.compareAndSet(head, newHead);
 				continue;
 			}
@@ -278,7 +277,7 @@ public class LockFreeVectorWithCombining<T> {
 			// (see above), so the AddToBatch failed and we keep going. 
 			if (queue.items.get(ticket) == FINISHED_SLOT) {
 				Head newHead = new Head(headIndex + 1, headCount); 
-				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
+				// [[The paper updates tail here, but that's a typo.]]
 				queue.head.compareAndSet(head, newHead);
 				continue;
 			}
@@ -287,7 +286,7 @@ public class LockFreeVectorWithCombining<T> {
 			WriteDescriptor<AtomicMarkableReference<T>> writeOp = queue.items.get(ticket);
 			if (!writeOp.pending) { // A different thread did it for us, so just update head.
 				Head newHead = new Head(headIndex + 1, headCount+1);
-				// [[The paper updates tail here, but I'm pretty sure that's wrong.]]
+				// [[The paper updates tail here, but that's a typo.]]
 				queue.head.compareAndSet(head, newHead);
 				continue;
 			}
