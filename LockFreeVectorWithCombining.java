@@ -166,7 +166,7 @@ public class LockFreeVectorWithCombining<T> {
 
 			if (currDesc.size == 0) {
 				// The vector is empty, but there's stuff in the combining queue, so we keep going.
-				elem = null; 
+				elem = null;
 			} else {
 				// Use readRefAt (which has no bounds checking) to get the reference, then extract 
 				// the value (if it exists).
@@ -176,6 +176,8 @@ public class LockFreeVectorWithCombining<T> {
 
 			// Create a new Descriptor.
 			newDesc = new Descriptor<>(currDesc.size - 1, null, OpType.POP);
+			// Prevents any weird errors that might happen if desc.size = 0.
+			if (currDesc.size == 0) newDesc.size = 0;
 			newDesc.offset = currDesc.size; // The size of the vector, without this pop.
 			newDesc.batch = batch.get(); // This signals that the Combine operation should start.
 
@@ -189,7 +191,7 @@ public class LockFreeVectorWithCombining<T> {
 					elem = combine(threadInfo, newDesc, false);
 				} else {
 					// Mark the node as logically deleted.
-					markNode(currDesc.size - 1);
+					if (currDesc.size > 0) markNode(currDesc.size - 1);
 				}
 				break;
 			}
@@ -247,7 +249,7 @@ public class LockFreeVectorWithCombining<T> {
 		if (descr.offset == -1) descr.offset = descr.size;
 
 		if (queue == null || !queue.closed) { // [[The paper has an AND here, which is a typo.]]
-			return null; // The queue is not closed, so the combining phase is finished.
+			return null; // The queue is null/open, so the combining phase already finished.
 		}
 
 		// We dequeue operations and execute them.
@@ -333,6 +335,18 @@ public class LockFreeVectorWithCombining<T> {
 		}
 
 		return null;
+	}
+	
+	// Closes the combining queue and starts the combining phase.
+	void startCombine() {
+		Descriptor<AtomicMarkableReference<T>> descr = desc.get();
+		completeWrite(descr.writeOp); // Just in case (I'm not sure if this is needed).
+		Queue<AtomicMarkableReference<T>> queue = batch.get();
+		if (queue == null) return; // The queue is non-existent, so there's nothing to combine.
+		queue.closed = true;
+		descr.batch = queue;
+		
+		combine(threadInfoGlobal.get(), descr, true);
 	}
 
 	T peek() {
