@@ -109,6 +109,7 @@ public class LockFreeVectorWithCombining<T> {
 				if (addToBatch(threadInfo, newDesc, writeOp)) {
 					return; // The operation was added to the queue, so we're done here.
 				}
+				
 				// We couldn't add it to the queue. Therefore, we'll try to help with the Combine 
 				// that is happening. If the CAS below succeeds, we'll do another loop (because 
 				// helpWithCombine is true) and add newElement then. If it fails, we'll do another
@@ -121,10 +122,13 @@ public class LockFreeVectorWithCombining<T> {
 
 			// Try the normal compare and set.
 			if (desc.compareAndSet(currDesc, newDesc)) {
+				threadInfo.size = newDesc.size;
+				
 				if (newDesc.batch != null) {
 					// AddToBatch set the descriptor's queue, which only happens when we're ready 
 					// to combine.
 					combine(threadInfo, newDesc, true);
+					
 					if (helpWithCombine) {
 						// We failed the AddToBatch above, so now that we're done helping with 
 						// Combine, we're going to do another loop (because we haven't added 
@@ -141,7 +145,6 @@ public class LockFreeVectorWithCombining<T> {
 		}
 
 		completeWrite(newDesc.writeOp);
-		threadInfo.size = newDesc.size;
 	}
 
 	T popBack() {
@@ -177,6 +180,8 @@ public class LockFreeVectorWithCombining<T> {
 			newDesc.batch = batch.get(); // This signals that the Combine operation should start.
 
 			if (desc.compareAndSet(currDesc, newDesc)) {
+				threadInfo.size = newDesc.size;
+				
 				if (newDesc.batch != null && newDesc.batch == batch.get()) {
 					// We need to execute any pending pushes before we can pop. Then we'll return 
 					// the last element added to the vector by Combine.
@@ -190,7 +195,6 @@ public class LockFreeVectorWithCombining<T> {
 			}
 		}
 
-		threadInfo.size = newDesc.size;
 		return elem;
 	}
 
