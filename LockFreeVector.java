@@ -127,8 +127,9 @@ public class LockFreeVector<T> {
 	}
 
 	int size() {
-		int size = desc.get().size;
-		if (desc.get().writeOp.pending) { // A pending pushBack().
+		Descriptor<T> currDesc = desc.get();
+		int size = currDesc.size;
+		if (currDesc.writeOp != null && currDesc.writeOp.pending) { // A pending pushBack().
 			size--;
 		}
 		return size;
